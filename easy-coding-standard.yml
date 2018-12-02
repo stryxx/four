@@ -105,3 +105,7 @@ parameters:
         - 'PhpCsFixer\Fixer\Whitespace\BlankLineBeforeStatementFixer'
         - 'SlevomatCodingStandard\Sniffs\TypeHints\TypeHintDeclarationSniff'
         - 'Symplify\CodingStandard\Sniffs\Debug\CommentedOutCodeSniff' #to be removed after beta release
+
+    skip:
+        Symplify\CodingStandard\Fixer\ArrayNotation\StandaloneLineInMultilineArrayFixer:
+            - 'src/Storage/Query/QueryParameterParser.php'

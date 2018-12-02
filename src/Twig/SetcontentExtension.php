@@ -15,19 +15,12 @@ use Twig\Extension\AbstractExtension;
  */
 class SetcontentExtension extends AbstractExtension
 {
-    /** @var Query $queryEngine */
+    /** @var Query */
     private $queryEngine;
-    /** @var MetadataDriver $metadataDriver */
-    private $metadataDriver;
 
-    /**
-     * @param Query          $queryEngine
-     * @param MetadataDriver $metadataDriver
-     */
-    public function __construct(Query $queryEngine, MetadataDriver $metadataDriver = null)
+    public function __construct(Query $queryEngine)
     {
         $this->queryEngine = $queryEngine;
-        $this->metadataDriver = $metadataDriver; // still needed?
     }
 
     /**
@@ -35,17 +28,12 @@ class SetcontentExtension extends AbstractExtension
      */
     public function getTokenParsers()
     {
-        $parsers = [
+        return [
             new SetcontentTokenParser(),
         ];
-
-        return $parsers;
     }
 
-    /**
-     * @return Query
-     */
-    public function getQueryEngine()
+    public function getQueryEngine(): Query
     {
         return $this->queryEngine;
     }
