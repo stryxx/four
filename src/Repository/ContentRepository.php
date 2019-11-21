@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bolt\Repository;
 
 use Bolt\Configuration\Content\ContentType;
+use Bolt\Doctrine\JsonHelper;
 use Bolt\Entity\Content;
 use Bolt\Enum\Statuses;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
@@ -13,6 +14,7 @@ use Doctrine\ORM\QueryBuilder;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bridge\Doctrine\RegistryInterface;
+use Tightenco\Collect\Support\Collection;
 
 /**
  * @method Content|null find($id, $lockMode = null, $lockVersion = null)
@@ -22,6 +24,8 @@ use Symfony\Bridge\Doctrine\RegistryInterface;
  */
 class ContentRepository extends ServiceEntityRepository
 {
+    private $contentColumns = ['id', 'author', 'contentType', 'status', 'createdAt', 'modifiedAt', 'publishedAt', 'depublishedAt'];
+
     public function __construct(RegistryInterface $registry)
     {
         parent::__construct($registry, Content::class);
@@ -48,10 +52,35 @@ class ContentRepository extends ServiceEntityRepository
                 ->setParameter('status', Statuses::PUBLISHED);
         }
 
+        [ $order, $direction, $sortByField ] = $this->createSortBy($contentType);
+
+        if (! $sortByField) {
+            $qb->orderBy('content.' . $order, $direction);
+        } else {
+            // @todo Make sorting on a Field work as expected.
+            dump('This is not correct');
+
+            // First, create a querybuilder to get the fields that match the Query
+            $sortByQB = $this->getQueryBuilder()
+                ->select('partial content.{id}');
+
+            $sortByQB->addSelect('f')
+                ->innerJoin('content.fields', 'f')
+                ->andWhere('f.name = :fieldname')
+                ->setParameter('fieldname', $order)
+                ->addOrderBy('f.name', $direction);
+
+            // These are the ID's of content we need.
+            $ids = array_column($sortByQB->getQuery()->getArrayResult(), 'id');
+
+            $qb->andWhere('content.id IN (:ids)')
+                ->setParameter('ids', $ids);
+        }
+
         return $this->createPaginator($qb->getQuery(), $page, $amountPerPage);
     }
 
-    public function findForTaxonomy(int $page, string $taxonomyslug, string $slug, int $amountPerPage, bool $onlyPublished = true): Pagerfanta
+    public function findForTaxonomy(int $page, Collection $taxonomy, string $slug, int $amountPerPage, bool $onlyPublished = true): Pagerfanta
     {
         $qb = $this->getQueryBuilder()
             ->addSelect('a')
@@ -60,13 +89,19 @@ class ContentRepository extends ServiceEntityRepository
         $qb->addSelect('t')
             ->innerJoin('content.taxonomies', 't')
             ->andWhere('t.type = :taxonomyslug')
-            ->setParameter('taxonomyslug', $taxonomyslug)
+            ->setParameter('taxonomyslug', $taxonomy->get('slug'))
             ->andWhere('t.slug = :slug')
             ->setParameter('slug', $slug);
 
         if ($onlyPublished) {
             $qb->andWhere('content.status = :status')
                 ->setParameter('status', Statuses::PUBLISHED);
+        }
+
+        [ $order, $direction, $sortByField ] = $this->createSortBy($taxonomy);
+
+        if (! $sortByField) {
+            $qb->orderBy('content.' . $order, $direction);
         }
 
         return $this->createPaginator($qb->getQuery(), $page, $amountPerPage);
@@ -128,7 +163,11 @@ class ContentRepository extends ServiceEntityRepository
 
     public function findOneBySlug(string $slug): ?Content
     {
-        return $this->getQueryBuilder()
+        $qb = $this->getQueryBuilder();
+
+        [$where, $slug] = JsonHelper::wrapJsonFunction('slug.value', $slug, $qb);
+
+        return $qb
             ->innerJoin('content.fields', 'field')
             ->innerJoin(
                 \Bolt\Entity\Field\SlugField::class,
@@ -136,18 +175,33 @@ class ContentRepository extends ServiceEntityRepository
                 'WITH',
                 'field.id = slug.id'
             )
-            ->andWhere('slug.value = :slug')
-            ->setParameter('slug', \GuzzleHttp\json_encode([$slug]))
+            ->andWhere($where . ' = :slug')
+            ->setParameter('slug', $slug)
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
+    public function findOneByFieldValue(string $fieldName, $value): ?Content
+    {
+        $qb = $this->getQueryBuilder();
+
+        [$where, $value] = JsonHelper::wrapJsonFunction('field.value', $value, $qb);
+
+        return $qb
+            ->innerJoin('content.fields', 'field')
+            ->andWhere($where . ' = :value')
+            ->setParameter('value', $value)
+            ->setMaxResults(1)
             ->getQuery()
             ->getOneOrNullResult();
     }
 
     private function createPaginator(Query $query, int $page, int $amountPerPage): Pagerfanta
     {
-        $paginator = new Pagerfanta(new DoctrineORMAdapter($query));
+        $paginator = new Pagerfanta(new DoctrineORMAdapter($query, true, true));
         $paginator->setMaxPerPage($amountPerPage);
         $paginator->setCurrentPage($page);
-
         return $paginator;
     }
 
@@ -177,5 +231,32 @@ class ContentRepository extends ServiceEntityRepository
         }
 
         return $qb->getQuery()->getOneOrNullResult();
+    }
+
+    /**
+     * Cobble together the sorting order, and whether or not it's a column in `content` or `fields`.
+     */
+    private function createSortBy(Collection $contentType): array
+    {
+        $order = $contentType->get('sort', '');
+
+        if (mb_strpos($order, '-') === 0) {
+            $direction = 'DESC';
+            $order = mb_substr($order, 1);
+        } elseif (mb_strpos($order, ' DESC') !== false) {
+            $direction = 'DESC';
+            $order = str_replace(' DESC', '', $order);
+        } else {
+            $order = str_replace(' ASC', '', $order);
+            $direction = 'ASC';
+        }
+
+        if (\in_array($order, $this->contentColumns, true)) {
+            $sortByField = false;
+        } else {
+            $sortByField = true;
+        }
+
+        return [$order, $direction, $sortByField];
     }
 }
